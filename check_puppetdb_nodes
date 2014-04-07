@@ -37,6 +37,7 @@ use Date::Parse;
 
 my $np = Nagios::Plugin->new(
     usage => "Usage: %s [ -H|--hostname=<hostname>] "
+      . "[ -n|--node=<node> ] "
       . "[ -p|--port=<port> ] [-s] [ -w|--warning=<minutes> ] "
       . "[ -c|--critical=<minutes> ] [ -W|--warnfails=<num> ] "
       . "[ -C|--critfails=<num> ]",
@@ -89,6 +90,12 @@ $np->add_arg(
 );
 
 $np->add_arg(
+    spec    => 'node|n=s',
+    help    => 'Node name to check',
+    default => 'localhost',
+);
+
+$np->add_arg(
     spec => 'ssl|s',
     help => "Use HTTPS instead of HTTP",
 );
@@ -99,68 +106,68 @@ my $url = sprintf( 'http%s://%s:%d/',
     defined( $np->opts->ssl ) ? 's' : '',
     $np->opts->hostname, $np->opts->port );
 
+my $nodename = $np->opts->node;
+
 my $ua = new LWP::UserAgent;
 $ua->default_header( 'Accept' => 'application/json' );
 
-my $response = $ua->get( $url . 'v3/nodes/' );
+my $response = $ua->get( $url . "v3/nodes/$nodename" );
 
 if ( !$response->is_success ) {
     $np->nagios_exit( 'UNKNOWN',
         $response->code . ": " . $response->status_line );
 }
 
-my $data = decode_json( $response->decoded_content );
+my $node = decode_json( $response->decoded_content );
 
 my $now = time();
 
-foreach my $node (@$data) {
-    my $name              = $node->{'name'};
-    my $deactivated       = $node->{'deactivated'};
-    my $catalog_timestamp = $node->{'catalog_timestamp'};
-    my $ts                = str2time($catalog_timestamp);
-    if ( !defined $deactivated ) {
-        my $delta = ( $now - $ts );
-        if ( $delta > ( $np->opts->critical * 60 ) ) {
-            $np->add_message( CRITICAL,
-                "$name did not update since $catalog_timestamp\n" );
-        }
-        elsif ( $delta > ( $np->opts->warning * 60 ) ) {
-            $np->add_message( WARNING,
-                "$name did not update since $catalog_timestamp\n" );
-        }
-
-        my %parameters = (
-            'query' => '["and",["=","certname","'
-              . $node->{'name'}
-              . '"],["=","latest-report?",true]]',
-            'summarize-by' => 'certname',
-            'count-by'     => 'resource',
-        );
-        my $uri = URI->new( $url . 'v3/event-counts' );
-        $uri->query_form(%parameters);
-        $response = $ua->get($uri);
-
-        if ( $response->is_success ) {
-            my $node_data = decode_json( $response->decoded_content );
-
-            my $failures = 0;
-            if (    defined( @$node_data[0] )
-                and defined( @$node_data[0]->{'failures'} ) )
-            {
-                $failures = @$node_data[0]->{'failures'};
-            }
-
-            if ( $failures >= $np->opts->critfails ) {
-                $np->add_message( CRITICAL,
-                    "$name had $failures failures in the last run\n" );
-            }
-            elsif ( $failures >= $np->opts->warnfails ) {
-                $np->add_message( WARNING,
-                    "$name had $failures failures in the last run\n" );
-            }
-        }
-
+my $name              = $node->{'name'};
+my $deactivated       = $node->{'deactivated'};
+my $catalog_timestamp = $node->{'catalog_timestamp'};
+my $ts                = str2time($catalog_timestamp);
+if ( !defined $deactivated ) {
+    my $delta = ( $now - $ts );
+    if ( $delta > ( $np->opts->critical * 60 ) ) {
+        $np->add_message( CRITICAL,
+            "$name did not update since $catalog_timestamp\n" );
     }
+    elsif ( $delta > ( $np->opts->warning * 60 ) ) {
+        $np->add_message( WARNING,
+            "$name did not update since $catalog_timestamp\n" );
+    }
+
+    my %parameters = (
+        'query' => '["and",["=","certname","'
+          . $node->{'name'}
+          . '"],["=","latest-report?",true]]',
+        'summarize-by' => 'certname',
+        'count-by'     => 'resource',
+    );
+    my $uri = URI->new( $url . 'v3/event-counts' );
+    $uri->query_form(%parameters);
+    $response = $ua->get($uri);
+
+    if ( $response->is_success ) {
+        my $node_data = decode_json( $response->decoded_content );
+
+        my $failures = 0;
+        if (    defined( @$node_data[0] )
+            and defined( @$node_data[0]->{'failures'} ) )
+        {
+            $failures = @$node_data[0]->{'failures'};
+        }
+
+        if ( $failures >= $np->opts->critfails ) {
+            $np->add_message( CRITICAL,
+                "$name had $failures failures in the last run\n" );
+        }
+        elsif ( $failures >= $np->opts->warnfails ) {
+            $np->add_message( WARNING,
+                "$name had $failures failures in the last run\n" );
+        }
+    }
+
 }
 
 my $code;
